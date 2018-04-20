@@ -31,7 +31,7 @@ class CustomerAPI(object):
             'x_delim_data': 'TRUE',
             'x_delim_char': ';',
         })
-        self.sdk_url = authorizenet_constants.SANDBOX if debug else authorizenet_contants.PRODUCTION
+        self.sdk_url = authorizenet_constants.SANDBOX if debug else authorizenet_constants.PRODUCTION
 
     @property
     def client(self):
