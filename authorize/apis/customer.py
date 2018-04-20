@@ -12,6 +12,10 @@ from authorize.apis.transaction import parse_response
 from authorize.exceptions import AuthorizeConnectionError, \
     AuthorizeError, AuthorizeResponseError, AuthorizeInvalidError
 
+from authorizenet import apicontractsv1
+from authorizenet.apicontrollers import createCustomerProfileController
+from authorizenet.constants import constants as authorizenet_constants
+
 PROD_URL = 'https://api.authorize.net/soap/v1/Service.asmx?WSDL'
 TEST_URL = 'https://apitest.authorize.net/soap/v1/Service.asmx?WSDL'
 
@@ -27,6 +31,7 @@ class CustomerAPI(object):
             'x_delim_data': 'TRUE',
             'x_delim_char': ';',
         })
+        self.sdk_url = authorizenet_constants.SANDBOX if debug else authorizenet_contants.PRODUCTION
 
     @property
     def client(self):
@@ -61,6 +66,41 @@ class CustomerAPI(object):
             raise e
         return response
 
+    def convert_payments(self, payments):
+        new_payments = []
+        for old_payment in payments:
+            credit_card = apicontractsv1.creditCardType()
+            credit_card.cardNumber = old_payment.payment.creditCard.cardNumber
+            credit_card.expirationDate = old_payment.payment.creditCard.expirationDate
+            credit_card.cvv = old_payment.payment.creditCard.cardCode
+
+            payment = apicontractsv1.paymentType()
+            payment.creditCard = credit_card
+
+            bill_to = apicontractsv1.customerAddressType()
+            if old_payment.billTo.address:
+                bill_to.address = old_payment.billTo.address
+            if old_payment.billTo.city:
+                bill_to.city = old_payment.billTo.city
+            if old_payment.billTo.state:
+                bill_to.state = old_payment.billTo.state
+            if old_payment.billTo.zip:
+                bill_to.zip = old_payment.billTo.zip
+            if old_payment.billTo.country:
+                bill_to.country = old_payment.billTo.country
+            if old_payment.billTo.firstName:
+                bill_to.firstName = old_payment.billTo.firstName
+            if old_payment.billTo.lastName:
+                bill_to.lastName = old_payment.billTo.lastName
+
+            profile = apicontractsv1.customerPaymentProfileType()
+            profile.customerType = 'individual'
+            profile.payment = payment
+            profile.billTo = bill_to
+
+            new_payments.append(profile)
+        return new_payments
+
     def create_saved_profile(self, internal_id, payments=None, email=None):
         """
         Creates a user profile to which you can attach saved payments.
@@ -69,19 +109,29 @@ class CustomerAPI(object):
         these will be automatically added to the user profile. Returns the
         user profile id.
         """
-        profile = self.client.factory.create('CustomerProfileType')
-        profile.merchantCustomerId = internal_id
-        profile.email = email
+        request = apicontractsv1.createCustomerProfileRequest()
+        client_auth = apicontractsv1.merchantAuthenticationType()
+        client_auth.name = self.login_id
+        client_auth.transactionKey = self.transaction_key
+        request.merchantAuthentication = client_auth
+
+        request.profile = apicontractsv1.customerProfileType()
+        request.profile.merchantCustomerId = internal_id
+        request.profile.email = email
+
         if payments:
-            payment_array = self.client.factory.create(
-                'ArrayOfCustomerPaymentProfileType')
-            payment_array.CustomerPaymentProfileType = payments
-            profile.paymentProfiles = payment_array
-        response = self._make_call('CreateCustomerProfile', profile, 'none')
+            payment_array = self.convert_payments(payments)
+            request.profile.paymentProfiles = payment_array
+
+        controller = createCustomerProfileController(request)
+        controller.setenvironment(self.sdk_url)
+        controller.execute()
+
+        response = controller.getresponse()
         profile_id = response.customerProfileId
         payment_ids = None
         if payments:
-            payment_ids = response.customerPaymentProfileIdList[0]
+            payment_ids = response.customerPaymentProfileIdList[0].getchildren()
         return profile_id, payment_ids
 
     @staticmethod
